@@ -1,30 +1,62 @@
-const mockProperties = [
-  { id: "p1", address: "1001 Dodge St, Omaha, NE 68102" },
-  { id: "p2", address: "2507 Farnam St, Omaha, NE 68131" },
-  { id: "p3", address: "8612 Maple St, Omaha, NE 68134" },
-];
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
+// Property list page (API-driven).
 export default function PropertyList() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load() {
+      try {
+        setLoading(true);
+        setErr("");
+
+        const res = await fetch("/api/properties");
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const data = await res.json();
+        if (!cancelled) setItems(data);
+      } catch (e) {
+        if (!cancelled) setErr(e?.message || "Failed to load properties");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <div className="container">
       <h1>Property List</h1>
 
-      <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
-        {mockProperties.map((p) => (
-          <div
-            key={p.id}
-            style={{
-              border: "1px solid rgba(255,255,255,0.08)",
-              borderRadius: 12,
-              padding: 12,
-              background: "rgba(255,255,255,0.03)",
-            }}
-          >
-            <div style={{ fontSize: 12, opacity: 0.65 }}>Property Address</div>
-            <div style={{ marginTop: 6, fontWeight: 650 }}>{p.address}</div>
-          </div>
-        ))}
-      </div>
+      {loading && <p className="meta">Loading...</p>}
+      {err && <p className="meta">Error: {err}</p>}
+
+      {!loading && !err && (
+        <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
+          {items.map((p) => (
+            <Link key={p.id} to={`/properties/${p.id}`} className="cardLink">
+              <div className="panel" style={{ padding: 14 }}>
+                <div className="meta">Property Address</div>
+                <div className="addr" style={{ marginTop: 6 }}>
+                  {p.address}
+                </div>
+                <div className="meta" style={{ marginTop: 8 }}>
+                  Status: {p.currentLease ? "Occupied" : "Vacant"}
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

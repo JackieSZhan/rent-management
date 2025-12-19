@@ -234,10 +234,12 @@ a {
 .scrollArea::-webkit-scrollbar {
   width: 10px;
 }
+
 .scrollArea::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.14);
   border-radius: 999px;
 }
+
 .scrollArea::-webkit-scrollbar-track {
   background: rgba(255, 255, 255, 0.04);
   border-radius: 999px;
@@ -324,4 +326,75 @@ a {
   margin-top: 6px;
   font-weight: 650;
   font-variant-numeric: tabular-nums;
+}
+
+/* Record Payment Button */
+.actionBtn {
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(0, 0, 0, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 650;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.actionBtn.ghost {
+  background: rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.actionBtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.modalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100;
+}
+
+.modal {
+  width: 100%;
+  max-width: 520px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(15, 16, 18, 0.92);
+  backdrop-filter: blur(10px);
+  padding: 14px;
+}
+
+.modalTitle {
+  font-weight: 750;
+  margin-bottom: 10px;
+}
+
+.modalField {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.modalInput {
+  height: 36px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.88);
+  padding: 0 10px;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
 }
