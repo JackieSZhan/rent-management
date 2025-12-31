@@ -5,6 +5,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+require("dotenv").config();
+const mongoose = require("mongoose");
+
+const Property = require("./models/Property");
+const LedgerEntry = require("./models/LedgerEntry");
+
 function newId(prefix = "e") {
   // Simple unique id generator for mock mode.
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -25,22 +31,37 @@ function postedAtFromPeriod(periodYYYYMM, day = 1) {
   return dt.toISOString();
 }
 
+// Build a stable ISO timestamp using period (YYYY-MM) and day (1-31).
+function postedAtFromPeriod(periodYYYYMM, day = 1) {
 
+  const [yStr, mStr] = String(periodYYYYMM || "").split("-");
+  const year = Number(yStr);
+  const month = Number(mStr); // 1-12
+  if (!year || !month) return new Date();
+
+  const lastDay = new Date(year, month, 0).getDate();
+  const safeDay = Math.min(Math.max(Number(day) || 1, 1), lastDay);
+
+  return new Date(Date.UTC(year, month - 1, safeDay, 9, 0, 0));
+}
+
+// Extract "YYYY-MM" from an ISO date string.
 function periodFromISO(iso) {
-  // Extract "YYYY-MM" from an ISO date string.
   const d = new Date(iso);
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
   return `${y}-${m}`;
 }
 
+// Convert "123.45" -> 12345 (cents). Returns null if invalid.
 function dollarsToCents(amount) {
-  // Convert "123.45" -> 12345 (cents). Returns null if invalid.
   if (amount === null || amount === undefined) return null;
   const n = Number(amount);
   if (!Number.isFinite(n)) return null;
   return Math.round(n * 100);
 }
+
+
 
 
 // Mock properties (later replace with MongoDB)
@@ -97,15 +118,16 @@ app.get("/api/health", (req, res) => {
 });
 
 // Properties list
-app.get("/api/properties", (req, res) => {
-  res.json(properties);
+app.get("/api/properties", async (req, res) => {
+  const items = await Property.find().sort({ createdAt: -1 });
+  res.json(items);
 });
 
 // Property detail
-app.get("/api/properties/:id", (req, res) => {
-  const found = properties.find((p) => p.id === req.params.id);
-  if (!found) return res.status(404).json({ message: "Not found" });
-  res.json(found);
+app.get("/api/properties/:id", async(req, res) => {
+  const item = await Property.findById(req.params.id);
+  if (!item) return res.status(404).json({ message: "Not found" });
+  res.json(item);
 });
 
 // Rent summary by period (rent-only totals)
@@ -123,19 +145,16 @@ app.get("/api/rent/summary", (req, res) => {
 });
 
 // Rent activities by period
-app.get("/api/rent/activities", (req, res) => {
-  const period = String(req.query.period || "");
+app.get("/api/rent/activities", async (req, res) => {
+  const period = String(req.query.period || "").trim();
+  const q = period ? { period } : {};
 
-  const items = ledger
-    .filter((e) => (period ? e.period === period : true))
-    .sort((a, b) => b.postedAt.localeCompare(a.postedAt));
-
+  const items = await LedgerEntry.find(q).sort({ postedAt: -1 });
   res.json(items);
 });
 
 // Generate rent charges for a period
-app.post("/api/rent/generate-charges", (req, res) => {
-  // Body: { period: "YYYY-MM" }
+app.post("/api/rent/generate-charges", async (req, res) => {
   const { period } = req.body || {};
   const p = String(period || "").trim();
 
@@ -143,53 +162,62 @@ app.post("/api/rent/generate-charges", (req, res) => {
     return res.status(400).json({ message: "period must be in YYYY-MM format" });
   }
 
-  // Only generate for occupied properties.
-  const occupied = properties.filter((x) => x.currentLease);
+  const occupied = await Property.find({ currentLease: { $ne: null } });
 
   const created = [];
+  const skipped = [];
+
   for (const prop of occupied) {
     const rentCents = prop.currentLease?.rentCents;
-    const dueDay = prop.currentLease?.dueDay ?? 1;
+    if (!Number.isFinite(rentCents) || rentCents <= 0) {
+      skipped.push({ propertyId: prop._id, reason: "missing_or_invalid_rentCents" });
+      continue;
+    }
 
-    if (!Number.isFinite(rentCents) || rentCents <= 0) continue;
-
-    // Prevent duplicates: one RENT CHARGE per property per period.
-    const exists = ledger.some(
-      (e) =>
-        e.period === p &&
-        e.propertyId === prop.id &&
-        e.type === "CHARGE" &&
-        e.subType === "RENT"
-    );
-    if (exists) continue;
-
-    const entry = {
-      id: newId("e"),
-      period: p,
-      propertyId: prop.id,
-      type: "CHARGE",
-      subType: "RENT",
-      amountCents: rentCents, // positive increases balance
-      postedAt: postedAtFromPeriod(p, 1),
-    };
-
-    ledger.push(entry);
-    created.push(entry);
+    try {
+      const entry = await LedgerEntry.create({
+        period: p,
+        propertyId: prop._id,
+        type: "CHARGE",
+        subType: "RENT",
+        amountCents: rentCents,
+        postedAt: postedAtFromPeriod(p, 1),
+      });
+      created.push(entry);
+    } catch (e) {
+      // Duplicate means it already exists (due to unique index)
+      skipped.push({ propertyId: prop._id, reason: "already_exists" });
+    }
   }
 
-  return res.status(201).json({
+  res.status(201).json({
     period: p,
+    occupiedCount: occupied.length,
     createdCount: created.length,
+    skippedCount: skipped.length,
+    skipped,
     created,
   });
 });
 
 
 // Record a rent payment
-app.post("/api/rent/payments", (req, res) => {
-  // Body: { propertyId, amountDollars, postedAt? }
-  const { propertyId, amountDollars, postedAt } = req.body || {};
+function periodFromISO(iso) {
+  const d = new Date(iso);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
 
+function dollarsToCents(amount) {
+  if (amount === null || amount === undefined) return null;
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return null;
+  return Math.round(n * 100);
+}
+
+app.post("/api/rent/payments", async (req, res) => {
+  const { propertyId, amountDollars, postedAt } = req.body || {};
   if (!propertyId) return res.status(400).json({ message: "propertyId is required" });
 
   const cents = dollarsToCents(amountDollars);
@@ -197,29 +225,42 @@ app.post("/api/rent/payments", (req, res) => {
     return res.status(400).json({ message: "amountDollars must be a positive number" });
   }
 
-  const p = properties.find((x) => x.id === propertyId);
-  if (!p) return res.status(404).json({ message: "Property not found" });
+  const prop = await Property.findById(propertyId);
+  if (!prop) return res.status(404).json({ message: "Property not found" });
 
-  // Default postedAt = now
-  const iso = postedAt ? new Date(postedAt).toISOString() : new Date().toISOString();
+  const iso = postedAt ? new Date(postedAt) : new Date();
   const period = periodFromISO(iso);
 
-  const entry = {
-    id: newId("e"),
+  const entry = await LedgerEntry.create({
     period,
-    propertyId,
+    propertyId: prop._id,
     type: "PAYMENT",
     subType: "RENT",
-    amountCents: -Math.abs(cents), // negative reduces balance
+    amountCents: -Math.abs(cents),
     postedAt: iso,
-  };
+  });
 
-  ledger.push(entry);
-  return res.status(201).json(entry);
+  res.status(201).json(entry);
 });
 
 
+
+// Start server
 const PORT = 3000;
+async function start() {
+  // Connect to MongoDB before starting the server.
+  await mongoose.connect(process.env.MONGO_URI);
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`Server listening on http://localhost:${PORT}`);
+  });
+}
+
+start().catch((err) => {
+  console.error("Failed to start server:", err);
+  process.exit(1);
+});
 app.listen(PORT, () => {
   console.log(`Server listening on http://localhost:${PORT}`);
 });
