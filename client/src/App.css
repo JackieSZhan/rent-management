@@ -27,3 +27,16 @@ a {
   margin: 0 auto;
   padding: 18px 16px;
 }
+
+.addrLink{
+  all: unset;
+  cursor: pointer;
+  font-weight: 650;
+  line-height: 1.25;
+  color: rgba(255,255,255,0.92);
+}
+.addrLink:hover{
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  opacity: 0.95;
+}

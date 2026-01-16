@@ -11,24 +11,13 @@ const mongoose = require("mongoose");
 const Property = require("./models/Property");
 const LedgerEntry = require("./models/LedgerEntry");
 
+// Express 4 does not automatically catch async errors.
+const asyncHandler = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
 function newId(prefix = "e") {
   // Simple unique id generator for mock mode.
   return `${prefix}_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
-
-function postedAtFromPeriod(periodYYYYMM, day = 1) {
-  // Build a stable ISO timestamp using period (YYYY-MM) and day (1-31).
-  const [yStr, mStr] = String(periodYYYYMM || "").split("-");
-  const year = Number(yStr);
-  const month = Number(mStr); // 1-12
-  if (!year || !month) return new Date().toISOString();
-
-  const lastDay = new Date(year, month, 0).getDate();
-  const safeDay = Math.min(Math.max(Number(day) || 1, 1), lastDay);
-
-  // Use UTC-ish ISO string to keep consistent ordering.
-  const dt = new Date(Date.UTC(year, month - 1, safeDay, 9, 0, 0));
-  return dt.toISOString();
 }
 
 // Build a stable ISO timestamp using period (YYYY-MM) and day (1-31).
@@ -45,72 +34,28 @@ function postedAtFromPeriod(periodYYYYMM, day = 1) {
   return new Date(Date.UTC(year, month - 1, safeDay, 9, 0, 0));
 }
 
-// Extract "YYYY-MM" from an ISO date string.
-function periodFromISO(iso) {
-  const d = new Date(iso);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  return `${y}-${m}`;
+function buildAddressString({ addressLine1, addressLine2, city, state, zipCode }) {
+  const parts = [
+    String(addressLine1 || "").trim(),
+    String(addressLine2 || "").trim(),
+    `${String(city || "").trim()}, ${String(state || "").trim()} ${String(zipCode || "").trim()}`.trim(),
+  ].filter(Boolean);
+
+  // Join line1/line2 and city/state/zip with ", ", similar to a mailing label.
+  return parts.join(", ");
 }
 
-// Convert "123.45" -> 12345 (cents). Returns null if invalid.
-function dollarsToCents(amount) {
-  if (amount === null || amount === undefined) return null;
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(n * 100);
+function normalizeAddressKey(s) {
+  // Normalize for duplicate checks: trim, collapse whitespace, lowercase.
+  return String(s || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
-
-
-
-// Mock properties (later replace with MongoDB)
-const properties = [
-  {
-    id: "p1",
-    address: "1001 Dodge St #3B, Omaha, NE 68102",
-    currentLease: {
-      startDate: "2025-10-01",
-      endDate: "2026-09-30",
-      dueDay: 1,
-      rentCents: 135000,
-      depositCents: 135000,
-      tenant: { fullName: "John Smith", phone: "(402) 555-0188", email: "john.smith@email.com" },
-    },
-  },
-  {
-    id: "p2",
-    address: "2507 Farnam St #12, Omaha, NE 68131",
-    currentLease: null,
-  },
-  {
-    id: "p3",
-    address: "8612 Maple St #2A, Omaha, NE 68134",
-    currentLease: {
-      startDate: "2025-06-01",
-      endDate: "2026-05-31",
-      dueDay: 5,
-      rentCents: 98000,
-      depositCents: 98000,
-      tenant: { fullName: "Emily Chen", phone: "(402) 555-0123", email: "emily.chen@email.com" },
-    },
-  },
-];
-
-// Mock ledger for rent summary/activities
-const ledger = [
-  // 2025-12
-  { id: "e1", period: "2025-12", propertyId: "p1", type: "CHARGE", subType: "RENT", amountCents: 135000, postedAt: "2025-12-01T09:00:00Z" },
-  { id: "e2", period: "2025-12", propertyId: "p1", type: "PAYMENT", subType: "RENT", amountCents: -80000, postedAt: "2025-12-10T18:00:00Z" },
-  { id: "e3", period: "2025-12", propertyId: "p1", type: "LATE_FEE", subType: "LATE_FEE", amountCents: 5000, postedAt: "2025-12-12T09:00:00Z" },
-
-  { id: "e4", period: "2025-12", propertyId: "p3", type: "CHARGE", subType: "RENT", amountCents: 98000, postedAt: "2025-12-01T09:00:00Z" },
-  { id: "e5", period: "2025-12", propertyId: "p3", type: "LATE_FEE", subType: "LATE_FEE", amountCents: 5000, postedAt: "2025-12-12T09:00:00Z" },
-
-  // 2026-01 (to verify period switching)
-  { id: "e6", period: "2026-01", propertyId: "p1", type: "CHARGE", subType: "RENT", amountCents: 135000, postedAt: "2026-01-01T09:00:00Z" },
-  { id: "e7", period: "2026-01", propertyId: "p1", type: "PAYMENT", subType: "RENT", amountCents: -135000, postedAt: "2026-01-03T14:00:00Z" },
-];
+function assertNonEmptyString(v) {
+  return typeof v === "string" && v.trim().length > 0;
+}
 
 // Health check
 app.get("/api/health", (req, res) => {
@@ -118,43 +63,116 @@ app.get("/api/health", (req, res) => {
 });
 
 // Properties list
-app.get("/api/properties", async (req, res) => {
-  const items = await Property.find().sort({ createdAt: -1 });
+app.get("/api/properties", asyncHandler(async (req, res) => {
+  const items = await Property.find().sort({ createdAt: -1 }).lean();
   res.json(items);
-});
+}));
+
+// Create property (vacant by default)
+app.post(
+  "/api/properties",
+  asyncHandler(async (req, res) => {
+    const { addressLine1, addressLine2, city, state, zipCode } = req.body || {};
+
+    if (!assertNonEmptyString(addressLine1)) {
+      return res.status(400).json({ message: "addressLine1 is required" });
+    }
+    if (!assertNonEmptyString(city)) {
+      return res.status(400).json({ message: "city is required" });
+    }
+    if (!assertNonEmptyString(state)) {
+      return res.status(400).json({ message: "state is required" });
+    }
+    if (!assertNonEmptyString(zipCode)) {
+      return res.status(400).json({ message: "zipCode is required" });
+    }
+
+    const address = buildAddressString({ addressLine1, addressLine2, city, state, zipCode });
+    const addressKey = normalizeAddressKey(address);
+
+    // Soft duplicate prevention (works even if schema has no unique index).
+    const existing = await Property.findOne({ addressKey }).lean();
+    if (existing) {
+      return res.status(409).json({ message: "Address already exists" });
+    }
+
+    const created = await Property.create({
+      address,
+      addressKey,
+      addressLine1: String(addressLine1).trim(),
+      addressLine2: String(addressLine2 || "").trim() || null,
+      city: String(city).trim(),
+      state: String(state).trim(),
+      zipCode: String(zipCode).trim(),
+      currentLease: null,
+    });
+
+    return res.status(201).json(created);
+  })
+);
 
 // Property detail
-app.get("/api/properties/:id", async(req, res) => {
-  const item = await Property.findById(req.params.id);
+app.get("/api/properties/:id", asyncHandler(async (req, res) => {
+  const item = await Property.findById(req.params.id).lean();
   if (!item) return res.status(404).json({ message: "Not found" });
   res.json(item);
-});
+}));
+
+// Delete property (hard delete)
+app.delete(
+  "/api/properties/:id",
+  asyncHandler(async (req, res) => {
+    const deleted = await Property.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ message: "Not found" });
+
+    // Also remove all ledger entries tied to this property (keep it simple; no audit).
+    await LedgerEntry.deleteMany({ propertyId: deleted._id });
+
+    return res.json({ ok: true });
+  })
+);
 
 // Rent summary by period (rent-only totals)
-app.get("/api/rent/summary", (req, res) => {
-  const period = String(req.query.period || "");
+app.get(
+  "/api/rent/summary",
+  asyncHandler(async (req, res) => {
+    const period = String(req.query.period || "").trim();
+    const q = period ? { period, subType: "RENT" } : { subType: "RENT" };
 
-  const periodRows = ledger.filter((e) => (period ? e.period === period : true));
-  const rentOnly = periodRows.filter((e) => e.subType === "RENT");
+    const items = await LedgerEntry.find({
+      ...q,
+      type: { $in: ["CHARGE", "PAYMENT", "ADJUSTMENT"] },
+    }).lean();
 
-  const totalDue = rentOnly.filter((e) => e.type === "CHARGE").reduce((s, e) => s + e.amountCents, 0);
-  const totalPaid = rentOnly.filter((e) => e.type === "PAYMENT").reduce((s, e) => s + Math.abs(e.amountCents), 0);
-  const outstanding = Math.max(0, totalDue - totalPaid);
+    let totalDue = 0;
+    let totalPaid = 0;
 
-  res.json({ period, totalDue, totalPaid, outstanding });
-});
+    for (const e of items) {
+      const amt = Number(e.amountCents || 0);
+      if (e.type === "CHARGE") totalDue += amt;
+      else if (e.type === "PAYMENT") totalPaid += Math.abs(amt);
+      else if (e.type === "ADJUSTMENT") {
+        if (amt >= 0) totalDue += amt;
+        else totalPaid += Math.abs(amt);
+      }
+    }
+
+    const outstanding = Math.max(0, totalDue - totalPaid);
+    res.json({ period, totalDue, totalPaid, outstanding });
+  })
+);
 
 // Rent activities by period
-app.get("/api/rent/activities", async (req, res) => {
+app.get("/api/rent/activities", asyncHandler(async (req, res) => {
   const period = String(req.query.period || "").trim();
   const q = period ? { period } : {};
 
   const items = await LedgerEntry.find(q).sort({ postedAt: -1 });
   res.json(items);
-});
+}));
 
 // Generate rent charges for a period
-app.post("/api/rent/generate-charges", async (req, res) => {
+app.post("/api/rent/generate-charges", asyncHandler(async (req, res) => {
   const { period } = req.body || {};
   const p = String(period || "").trim();
 
@@ -198,8 +216,112 @@ app.post("/api/rent/generate-charges", async (req, res) => {
     skipped,
     created,
   });
-});
+}));
 
+// Validate "YYYY-MM"
+function assertPeriodYYYYMM(period) {
+  if (typeof period !== "string" || !/^\d{4}-\d{2}$/.test(period)) return false;
+  const m = Number(period.slice(5, 7));
+  return m >= 1 && m <= 12;
+}
+
+// Calculate outstanding rent (in cents) for a property within a period.
+// Positive result means the tenant still owes money.
+async function getOutstandingRentCents({ period, propertyId }) {
+  const items = await LedgerEntry.find({
+    period,
+    propertyId,
+    subType: "RENT",
+    type: { $in: ["CHARGE", "PAYMENT", "ADJUSTMENT"] },
+  }).lean();
+
+  let due = 0;
+  let paid = 0;
+
+  for (const e of items) {
+    const amt = Number(e.amountCents || 0);
+
+    if (e.type === "CHARGE") {
+      due += amt;
+    } else if (e.type === "PAYMENT") {
+      paid += Math.abs(amt);
+    } else if (e.type === "ADJUSTMENT") {
+      if (amt >= 0) due += amt;
+      else paid += Math.abs(amt);
+    }
+  }
+
+  return Math.max(0, due - paid);
+}
+
+// Generate late fees for a period (only for properties that still have outstanding rent).
+// Rules:
+// - lateFeePercent > 0 takes priority
+// - else use lateFeeAmountCents
+// - do not create duplicates for the same (period, propertyId)
+app.post("/api/rent/generate-late-fees", async (req, res) => {
+  try {
+    const { period } = req.body || {};
+    const p = String(period || "").trim();
+
+    if (!assertPeriodYYYYMM(p)) {
+      return res.status(400).json({ message: "period must be in YYYY-MM format" });
+    }
+
+    const props = await Property.find({ currentLease: { $ne: null } }).lean();
+    let createdCount = 0;
+
+    for (const prop of props) {
+      const propertyId = prop._id;
+      const lease = prop.currentLease || {};
+
+      let pct = Number(lease.lateFeePercent || 0);
+      const flat = Number(lease.lateFeeAmountCents || 0);
+
+      // Allow both 0.05 (5%) and 5 (5%) inputs
+      if (pct > 1) pct = pct / 100;
+
+      // Skip if no late fee rule configured
+      if (!(pct > 0) && !(flat > 0)) continue;
+
+      // Skip if already has late fee for this period
+      const exists = await LedgerEntry.findOne({
+        period: p,
+        propertyId,
+        type: "LATE_FEE",
+        subType: "LATE_FEE",
+      }).lean();
+      if (exists) continue;
+
+      const outstanding = await getOutstandingRentCents({ period: p, propertyId });
+      if (outstanding <= 0) continue;
+
+      // For percent-based fee, compute from outstanding to keep it minimal and safe.
+      // (Later you can switch to compute from total rent due if you prefer.)
+      let feeCents = 0;
+      if (pct > 0) feeCents = Math.round(outstanding * pct);
+      else feeCents = flat;
+
+      if (!Number.isFinite(feeCents) || feeCents <= 0) continue;
+
+      await LedgerEntry.create({
+        period: p,
+        propertyId,
+        type: "LATE_FEE",
+        subType: "LATE_FEE",
+        amountCents: feeCents,
+        postedAt: new Date(),
+      });
+
+      createdCount += 1;
+    }
+
+    return res.json({ period: p, createdCount });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ message: e?.message || "Failed to generate late fees" });
+  }
+});
 
 // Record a rent payment
 function periodFromISO(iso) {
@@ -216,7 +338,7 @@ function dollarsToCents(amount) {
   return Math.round(n * 100);
 }
 
-app.post("/api/rent/payments", async (req, res) => {
+app.post("/api/rent/payments", asyncHandler(async (req, res) => {
   const { propertyId, amountDollars, postedAt } = req.body || {};
   if (!propertyId) return res.status(400).json({ message: "propertyId is required" });
 
@@ -241,26 +363,39 @@ app.post("/api/rent/payments", async (req, res) => {
   });
 
   res.status(201).json(entry);
+}));
+
+// Delete a rent activity entry
+app.delete("/api/rent/activities/:id", asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const deleted = await LedgerEntry.findByIdAndDelete(id);
+  if (!deleted) return res.status(404).json({ message: "Entry not found" });
+
+  return res.json({ ok: true });
+}));
+
+// Global error handler (keeps the server from crashing on async route errors)
+app.use((err, req, res, next) => {
+  console.error(err);
+  res.status(500).json({ message: err?.message || "Internal server error" });
 });
 
-
-
 // Start server
-const PORT = 3000;
 async function start() {
+  if (!process.env.MONGO_URI) {
+    throw new Error("MONGO_URI is not set");
+  }
   // Connect to MongoDB before starting the server.
   await mongoose.connect(process.env.MONGO_URI);
 
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.log(`Server listening on http://localhost:${PORT}`);
+    console.log(`Server listening on port ${PORT}`);
   });
 }
 
 start().catch((err) => {
   console.error("Failed to start server:", err);
   process.exit(1);
-});
-app.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
 });

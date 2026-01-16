@@ -35,6 +35,19 @@ async function run() {
         tenant: { fullName: "Emily Chen", phone: "(402) 555-0123", email: "emily.chen@email.com" },
       },
     },
+     {
+      address: "5010 S 75th Plz #304, Omaha, NE 68127",
+      currentLease: {
+        startDate: "2025-06-01",
+        endDate: "2026-05-31",
+        dueDay: 5,
+        rentCents: 149000,
+        depositCents: 149000,
+        tenant: { fullName: "Jackie Zhan", phone: "402-215-8891", email: "jackieszhan@yahoo.com" },
+        lateFeePercent: 0,
+        lateFeeAmountCents: 15000,
+      },
+    },
   ]);
 
   console.log("Seed done.");

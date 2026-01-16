@@ -1,167 +1,113 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 function money(cents) {
-  return `$${(cents / 100).toFixed(2)}`;
+  return `$${(Number(cents || 0) / 100).toFixed(2)}`;
 }
 
-function formatDate(iso) {
-  if (!iso) return "-";
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "2-digit" });
-}
-
-// Property detail page (API-driven).
 export default function PropertyDetail() {
   const { id } = useParams();
-
-  const [property, setProperty] = useState(null);
+  const [item, setItem] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
+    const ac = new AbortController();
+    (async () => {
       try {
         setLoading(true);
         setErr("");
-
-        const res = await fetch(`/api/properties/${id}`);
+        const res = await fetch(`/api/properties/${id}`, { signal: ac.signal });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
         const data = await res.json();
-        if (!cancelled) setProperty(data);
+        setItem(data);
       } catch (e) {
-        if (!cancelled) setErr(e?.message || "Failed to load property");
+        if (!ac.signal.aborted) setErr(e?.message || "Failed to load property");
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!ac.signal.aborted) setLoading(false);
       }
-    }
-
-    load();
-    return () => {
-      cancelled = true;
-    };
+    })();
+    return () => ac.abort();
   }, [id]);
 
-  if (loading) {
-    return (
-      <div className="container">
-        <h1>Property</h1>
-        <p className="meta">Loading...</p>
-      </div>
-    );
-  }
+  const lease = item?.currentLease || null;
+  const tenant = lease?.tenant || null;
 
-  if (err) {
-    return (
-      <div className="container">
-        <h1>Property</h1>
-        <p className="meta">Error: {err}</p>
-        <div style={{ marginTop: 12 }}>
-          <Link className="meta" to="/properties">
-            ← Back to Property List
-          </Link>
-        </div>
-      </div>
-    );
-  }
+  const lateRule = useMemo(() => {
+    if (!lease) return "-";
+    const pct = Number(lease.lateFeePercent || 0);
+    const amt = Number(lease.lateFeeAmountCents || 0);
+    if (pct > 0) return `${pct > 1 ? pct : pct * 100}%`;
+    if (amt > 0) return money(amt);
+    return "-";
+  }, [lease]);
 
-  if (!property) {
-    return (
-      <div className="container">
-        <h1>Property</h1>
-        <p className="meta">Not found.</p>
-        <div style={{ marginTop: 12 }}>
-          <Link className="meta" to="/properties">
-            ← Back to Property List
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const lease = property.currentLease;
+  if (loading) return <div className="container"><div className="meta">Loading...</div></div>;
+  if (err) return <div className="container"><div className="meta">Error: {err}</div></div>;
+  if (!item) return <div className="container"><div className="meta">Not found</div></div>;
 
   return (
     <div className="container">
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
-        <h1>Property</h1>
-        <Link className="meta" to="/properties">
-          ← Back
-        </Link>
+      <div style={{ marginBottom: 12 }}>
+        <Link className="navLink" to="/properties">← Back</Link>
       </div>
 
-      <section className="panel" style={{ marginTop: 12 }}>
+      <section className="panel">
         <div className="panelHeader">
-          <h2>Address</h2>
+          <h2>Property</h2>
           <span className="chip">{lease ? "Occupied" : "Vacant"}</span>
         </div>
-        <div className="addr">{property.address}</div>
-      </section>
 
-      <div className="detailGrid" style={{ marginTop: 12 }}>
-        <section className="panel">
-          <div className="panelHeader">
-            <h2>Current Lease Term</h2>
-            <span className="chip">{lease ? "Active" : "None"}</span>
-          </div>
+        <div className="addr" style={{ fontSize: 16 }}>{item.address}</div>
 
-          {lease ? (
+        {!lease ? (
+          <div className="meta" style={{ marginTop: 10 }}>No current lease.</div>
+        ) : (
+          <div className="detailGrid" style={{ marginTop: 12 }}>
             <div className="kvGrid">
               <div className="kv">
-                <div className="kvLabel">Start Date</div>
-                <div className="kvValue">{formatDate(lease.startDate)}</div>
+                <div className="kvLabel">Tenant</div>
+                <div className="kvValue">{tenant?.fullName || "-"}</div>
               </div>
               <div className="kv">
-                <div className="kvLabel">End Date</div>
-                <div className="kvValue">{formatDate(lease.endDate)}</div>
-              </div>
-              <div className="kv">
-                <div className="kvLabel">Due Day</div>
-                <div className="kvValue">{lease.dueDay}</div>
-              </div>
-              <div className="kv">
-                <div className="kvLabel">Monthly Rent</div>
+                <div className="kvLabel">Rent</div>
                 <div className="kvValue">{money(lease.rentCents)}</div>
               </div>
               <div className="kv">
                 <div className="kvLabel">Deposit</div>
                 <div className="kvValue">{money(lease.depositCents)}</div>
               </div>
+              <div className="kv">
+                <div className="kvLabel">Due day</div>
+                <div className="kvValue">{lease.dueDay ?? "-"}</div>
+              </div>
             </div>
-          ) : (
-            <div className="meta">No active lease for this property.</div>
-          )}
-        </section>
 
-        <section className="panel">
-          <div className="panelHeader">
-            <h2>Current Tenant</h2>
-            <span className="chip">Contact</span>
-          </div>
-
-          {lease?.tenant ? (
             <div className="kvGrid">
               <div className="kv">
-                <div className="kvLabel">Name</div>
-                <div className="kvValue">{lease.tenant.fullName}</div>
+                <div className="kvLabel">Start</div>
+                <div className="kvValue">{lease.startDate || "-"}</div>
+              </div>
+              <div className="kv">
+                <div className="kvLabel">End</div>
+                <div className="kvValue">{lease.endDate || "-"}</div>
               </div>
               <div className="kv">
                 <div className="kvLabel">Phone</div>
-                <div className="kvValue">{lease.tenant.phone}</div>
+                <div className="kvValue">{tenant?.phone || "-"}</div>
               </div>
               <div className="kv">
                 <div className="kvLabel">Email</div>
-                <div className="kvValue">{lease.tenant.email}</div>
+                <div className="kvValue">{tenant?.email || "-"}</div>
+              </div>
+              <div className="kv">
+                <div className="kvLabel">Late fee rule</div>
+                <div className="kvValue">{lateRule}</div>
               </div>
             </div>
-          ) : (
-            <div className="meta">No tenant (vacant).</div>
-          )}
-        </section>
-      </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 }

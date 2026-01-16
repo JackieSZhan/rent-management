@@ -6,7 +6,7 @@ const LedgerEntrySchema = new mongoose.Schema(
     propertyId: { type: mongoose.Schema.Types.ObjectId, required: true, ref: "Property" },
 
     type: { type: String, required: true }, // CHARGE | PAYMENT | LATE_FEE | ADJUSTMENT
-    subType: { type: String, required: true }, // RENT | LATE_FEE
+    subType: { type: String, required: true }, // RENT
     amountCents: { type: Number, required: true },
     postedAt: { type: Date, required: true },
   },

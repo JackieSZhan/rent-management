@@ -44,9 +44,10 @@ a {
 
 /* App layout container */
 .container {
-  max-width: 1200px;
+  width: 100%;
+  max-width: 1440px;
   margin: 0 auto;
-  padding: 28px 20px;
+  padding: 20px 24px;
 }
 
 /* Navbar (cursor.directory-like) */
@@ -117,6 +118,11 @@ a {
   border-radius: 16px;
   box-shadow: var(--shadow);
   padding: 14px;
+
+  /* Allow children to stretch and scroll inside panels */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .panelHeader {
@@ -146,11 +152,16 @@ a {
   display: grid;
   grid-template-columns: 2fr 1fr 1fr;
   gap: 12px;
+
+  /* Make the 3 regions fill the viewport height (minus navbar + page padding) */
+  min-height: calc(100vh - 64px - 40px);
+  align-items: stretch;
 }
 
 @media (max-width: 980px) {
   .rentGrid {
     grid-template-columns: 1fr;
+    min-height: auto;
   }
 }
 
@@ -180,11 +191,37 @@ a {
   font-weight: 750;
 }
 
+/* Toast notification */
+.toast {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 9999;
+
+  padding: 10px 12px;
+  border-radius: 10px;
+  max-width: 360px;
+
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(20, 20, 20, 0.92);
+  color: #e7e7e7;
+
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  font-size: 13px;
+  cursor: pointer;
+
+  backdrop-filter: blur(6px);
+}
+.toast:hover { border-color: rgba(255,255,255,0.2); }
+.toast:active { transform: translateY(1px); }
+
 /* Table */
 .table {
   border: 1px solid var(--border);
   border-radius: 14px;
-  overflow: hidden;
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
 }
 
 .row {
@@ -225,9 +262,12 @@ a {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 8px;
-  max-height: 420px;
   overflow: auto;
   background: rgba(255, 255, 255, 0.02);
+
+  /* Fill remaining panel height */
+  flex: 1;
+  min-height: 0;
 }
 
 /* Optional: nicer scrollbar (WebKit browsers) */

@@ -34,6 +34,8 @@ function activityTitle(e) {
     return "Ledger update";
 }
 
+
+
 export default function Rent() {
     const [period, setPeriod] = useState(getCurrentPeriodYYYYMM());
     const [properties, setProperties] = useState([]);
@@ -44,6 +46,8 @@ export default function Rent() {
     const [err, setErr] = useState("");
 
     const [generating, setGenerating] = useState(false);
+    const [generatingLateFees, setGeneratingLateFees] = useState(false);
+    const [showLateFeeConfirm, setShowLateFeeConfirm] = useState(false);
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
     const [paymentPropertyId, setPaymentPropertyId] = useState("");
@@ -64,6 +68,28 @@ export default function Rent() {
         if (!res.ok) throw new Error(`Activities HTTP ${res.status}`);
         const data = await res.json();
         setEntries(Array.isArray(data) ? data : []);
+    }
+
+    // Delete a rent activity entry
+    async function deleteEntry(entryId) {
+        const ok = window.confirm("Delete this activity? This cannot be undone.");
+        if (!ok) return;
+
+        try {
+            setErr("");
+            setActionMsg("Deleting activity...");
+
+            const res = await fetch(`/api/rent/activities/${entryId}`, { method: "DELETE" });
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload?.message || `Delete HTTP ${res.status}`);
+
+            setActionMsg("Deleted.");
+            await loadEntries(period);
+        } catch (e) {
+            const msg = e?.message || "Failed to delete activity";
+            setErr(msg);
+            setActionMsg(msg);
+        }
     }
 
     // Load properties once
@@ -100,10 +126,20 @@ export default function Rent() {
         return () => ac.abort();
     }, [period]);
 
+
+    // Auto-dismiss toast after 3 seconds.
+    useEffect(() => {
+        if (!actionMsg) return;
+        const t = setTimeout(() => setActionMsg(""), 3000);
+        return () => clearTimeout(t);
+    }, [actionMsg]);
+
+    // Generate rent charges for the period
     async function generateCharges() {
         try {
             setGenerating(true);
             setErr("");
+            setActionMsg("Generating charges...");
 
             const res = await fetch("/api/rent/generate-charges", {
                 method: "POST",
@@ -119,11 +155,44 @@ export default function Rent() {
 
             await loadEntries(period);
         } catch (e) {
-            setErr(e?.message || "Failed to generate charges");
+            const msg = e?.message || "Failed to generate charges";
+            setErr(msg);
+            setActionMsg(msg);
         } finally {
             setGenerating(false);
         }
     }
+
+    // Generate late fees for the period
+    async function generateLateFees() {
+        try {
+            setGeneratingLateFees(true);
+            setErr("");
+            setActionMsg("Generating late fees...");
+
+            const res = await fetch("/api/rent/generate-late-fees", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ period }),
+            });
+
+            const payload = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(payload?.message || `Late fee HTTP ${res.status}`);
+
+            const created = payload.createdCount ?? 0;
+            setActionMsg(created > 0 ? `Generated ${created} late fee(s).` : "No late fees generated.");
+
+            await loadEntries(period);
+        } catch (e) {
+            const msg = e?.message || "Failed to generate late fees";
+            setErr(msg);
+            setActionMsg(msg);
+        } finally {
+            setGeneratingLateFees(false);
+        }
+    }
+
+
 
     async function submitPayment() {
         if (!paymentPropertyId) return alert("Please select a property.");
@@ -157,7 +226,13 @@ export default function Rent() {
 
     const propertyById = useMemo(() => {
         const m = new Map();
-        for (const p of properties) m.set(propId(p), p);
+        for (const p of properties) {
+            const pid = propId(p);
+            m.set(pid, p);
+
+            const lid = String(p.currentLease?.id ?? p.currentLease?._id ?? "");
+            if (lid) m.set(lid, p); // allow lookup by leaseId too
+        }
         return m;
     }, [properties]);
 
@@ -181,8 +256,11 @@ export default function Rent() {
         for (const e of entries) {
             if (e.subType !== "RENT") continue;
 
-            const pid = String(e.propertyId ?? e.leaseId ?? "");
+            const raw = String(e.propertyId ?? e.leaseId ?? "");
+            const p = propertyById.get(raw);
+            const pid = p ? propId(p) : raw;
             const row = agg.get(pid);
+
             if (!row) continue;
 
             if (e.type === "CHARGE") row.dueCents += e.amountCents;
@@ -212,9 +290,9 @@ export default function Rent() {
         const sorted = [...entries].sort((a, b) => String(b.postedAt).localeCompare(String(a.postedAt)));
 
         return sorted.map((e) => {
-            const pid = String(e.propertyId ?? e.leaseId ?? "");
-            const p = propertyById.get(pid);
-            const addr = p?.address || pid;
+            const raw = String(e.propertyId ?? e.leaseId ?? "");
+            const p = propertyById.get(raw);
+            const addr = p?.address || raw;
 
             return {
                 id: String(e.id ?? e._id ?? ""),
@@ -229,6 +307,17 @@ export default function Rent() {
 
     return (
         <div className="container">
+            {actionMsg && (
+                <div
+                    className="toast"
+                    role="status"
+                    aria-live="polite"
+                    onClick={() => setActionMsg("")}
+                    title="Click to dismiss"
+                >
+                    {actionMsg}
+                </div>
+            )}
             {err && <p className="meta">Error: {err}</p>}
 
             <div className="rentGrid">
@@ -237,12 +326,62 @@ export default function Rent() {
                     <div className="panelHeader" style={{ display: "flex", alignItems: "center", gap: 12 }}>
                         <h2 style={{ marginRight: "auto" }}>{period} — Rent Collection</h2>
 
-                        <input className="periodInput" type="month" value={period} onChange={(e) => setPeriod(e.target.value)} />
+                        <input
+                            className="periodInput"
+                            type="month"
+                            value={period}
+                            onChange={(e) => setPeriod(e.target.value)}
+                        />
 
-                        <button className="actionBtn" type="button" onClick={generateCharges} disabled={generating}>
-                            {generating ? "Generating..." : "Generate Charges"}
-                        </button>
+                        <div style={{ display: "flex", gap: 10 }}>
+                            <button className="actionBtn" type="button" onClick={generateCharges} disabled={generating}>
+                                {generating ? "Generating..." : "Generate Charges"}
+                            </button>
+
+                            <button
+                                className="actionBtn ghost"
+                                type="button"
+                                onClick={() => setShowLateFeeConfirm(true)}
+                                disabled={generatingLateFees}
+                                title="Creates a late fee entry for properties with outstanding rent in this period."
+                            >
+                                {generatingLateFees ? "Generating..." : "Post Late Fees"}
+                            </button>
+                        </div>
                     </div>
+
+                    {showLateFeeConfirm && (
+                        <div className="modalOverlay" onClick={() => setShowLateFeeConfirm(false)}>
+                            <div className="modal" onClick={(e) => e.stopPropagation()}>
+                                <div className="modalTitle">Confirm</div>
+                                <div className="meta" style={{ marginTop: 6 }}>
+                                    This will post late fees for period <b>{period}</b>. Continue?
+                                </div>
+
+                                <div className="modalActions">
+                                    <button
+                                        className="actionBtn ghost"
+                                        type="button"
+                                        onClick={() => setShowLateFeeConfirm(false)}
+                                    >
+                                        Cancel
+                                    </button>
+
+                                    <button
+                                        className="actionBtn"
+                                        type="button"
+                                        disabled={generatingLateFees}
+                                        onClick={async () => {
+                                            setShowLateFeeConfirm(false);
+                                            await generateLateFees();
+                                        }}
+                                    >
+                                        {generatingLateFees ? "Posting..." : "Confirm"}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     {showPaymentModal && (
                         <div className="modalOverlay" onClick={() => setShowPaymentModal(false)}>
@@ -388,9 +527,20 @@ export default function Rent() {
                                     <div style={{ flex: 1 }}>
                                         <div className="addr" style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                                             <span>{a.title}</span>
-                                            <span className="meta" style={{ marginTop: 0 }}>
-                                                {a.date}
-                                            </span>
+
+                                            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                                                <span className="meta" style={{ marginTop: 0 }}>
+                                                    {a.date}
+                                                </span>
+
+                                                <button
+                                                    className="actionBtn ghost"
+                                                    type="button"
+                                                    onClick={() => deleteEntry(a.id)}
+                                                >
+                                                    Delete
+                                                </button>
+                                            </div>
                                         </div>
                                         <div className="meta">{a.detail}</div>
                                     </div>

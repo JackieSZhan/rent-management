@@ -17,6 +17,9 @@ const LeaseSchema = new mongoose.Schema(
     rentCents: { type: Number, required: true },
     depositCents: { type: Number, default: 0 },
     tenant: { type: TenantSchema, default: null },
+    lateFeeAmountCents: { type: Number, default: 0 },
+    lateFeePercent: { type: Number, default: 0 },
+    graceDays: { type: Number, default: 0 },
   },
   { _id: false }
 );
