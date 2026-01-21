@@ -26,6 +26,8 @@ export default function PropertyList() {
   const [showLeaseModal, setShowLeaseModal] = useState(false);
   const [leasePropId, setLeasePropId] = useState("");
 
+  // Lease modal fields
+  const [leaseStatus, setLeaseStatus] = useState("occupied"); // 'occupied' | 'vacant'
   const [leaseTenantName, setLeaseTenantName] = useState("");
   const [leaseRentDollars, setLeaseRentDollars] = useState("");
   const [leaseDueDay, setLeaseDueDay] = useState("1");
@@ -87,13 +89,7 @@ export default function PropertyList() {
         addressLine2: addr2.trim() || "",
         city: city.trim(),
         state: stateUS.trim(),
-        zipCode: zip.trim()
-          ? {
-            tenantName: tenantName.trim(),
-            rentCents: Math.round(Number(rentDollars || 0) * 100),
-            dueDay: Number(dueDay || 1),
-          }
-          : null,
+        zipCode: zip.trim(),
       };
 
       const res = await fetch("/api/properties", {
@@ -181,7 +177,8 @@ export default function PropertyList() {
                             className="addrLink"
                             onClick={() => {
                               setLeasePropId(propId(p));
-                              setLeaseTenantName(p.currentLease?.tenantName || "");
+                              setLeaseStatus(p.currentLease ? "occupied" : "vacant");
+                              setLeaseTenantName(p.currentLease?.tenant?.fullName || "");
                               setLeaseRentDollars(
                                 p.currentLease?.rentCents ? String(p.currentLease.rentCents / 100) : ""
                               );
@@ -192,7 +189,7 @@ export default function PropertyList() {
                             {p.address}
                           </button>
                           <div className="meta">
-                            {p.currentLease?.tenantName || "Tenant"} · {money(p.currentLease?.rentCents)} · Due day {p.currentLease?.dueDay ?? "-"}
+                            {p.currentLease?.tenant?.fullName || "Tenant"} · {money(p.currentLease?.rentCents)} · Due day of the month {p.currentLease?.dueDay ?? "-"}
                           </div>
                         </div>
                       </div>
@@ -224,7 +221,20 @@ export default function PropertyList() {
                       <div style={{ display: "flex", gap: 10 }}>
                         <div className="dot" />
                         <div>
-                          <div className="addr">{p.address}</div>
+                          <button
+                            type="button"
+                            className="addrLink"
+                            onClick={() => {
+                              setLeasePropId(propId(p));
+                              setLeaseStatus("vacant");
+                              setLeaseTenantName("");
+                              setLeaseRentDollars("");
+                              setLeaseDueDay("1");
+                              setShowLeaseModal(true);
+                            }}
+                          >
+                            {p.address}
+                          </button>
                           <div className="meta">Status: Vacant</div>
                         </div>
                       </div>
@@ -301,11 +311,25 @@ export default function PropertyList() {
             <div className="modalTitle">Lease details</div>
 
             <div className="modalField">
+              <div className="meta">Status</div>
+              <select
+                className="modalInput"
+                value={leaseStatus}
+                onChange={(e) => setLeaseStatus(e.target.value)}
+              >
+                <option value="occupied">Occupied</option>
+                <option value="vacant">Vacant</option>
+              </select>
+            </div>
+
+            <div className="modalField">
               <div className="meta">Tenant name</div>
               <input
                 className="modalInput"
                 value={leaseTenantName}
                 onChange={(e) => setLeaseTenantName(e.target.value)}
+                disabled={leaseStatus === "vacant"}
+                placeholder={leaseStatus === "vacant" ? "(vacant)" : ""}
               />
             </div>
 
@@ -318,6 +342,7 @@ export default function PropertyList() {
                   inputMode="decimal"
                   value={leaseRentDollars}
                   onChange={(e) => setLeaseRentDollars(e.target.value)}
+                  disabled={leaseStatus === "vacant"}
                 />
               </div>
 
@@ -330,12 +355,19 @@ export default function PropertyList() {
                   max="31"
                   value={leaseDueDay}
                   onChange={(e) => setLeaseDueDay(e.target.value)}
+                  disabled={leaseStatus === "vacant"}
                 />
               </div>
             </div>
 
             <div className="modalActions">
-              <button className="actionBtn ghost" type="button" onClick={() => setShowLeaseModal(false)}>
+              <button
+                className="actionBtn ghost"
+                type="button"
+                onClick={() => {
+                  setShowLeaseModal(false);
+                }}
+              >
                 Cancel
               </button>
 
@@ -352,9 +384,10 @@ export default function PropertyList() {
                       method: "PUT",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        tenantName: leaseTenantName.trim(),
-                        rentCents: Math.round(Number(leaseRentDollars || 0) * 100),
-                        dueDay: Number(leaseDueDay || 1),
+                        status: leaseStatus,
+                        tenant: leaseStatus === "occupied" ? { fullName: leaseTenantName.trim() } : null,
+                        rentCents: leaseStatus === "occupied" ? Math.round(Number(leaseRentDollars || 0) * 100) : 0,
+                        dueDay: leaseStatus === "occupied" ? Number(leaseDueDay || 1) : null,
                       }),
                     });
 
@@ -376,7 +409,7 @@ export default function PropertyList() {
             </div>
 
             <div className="meta" style={{ marginTop: 10 }}>
-              Tip: leave tenant blank if you want “vacant” (we can add a Remove Lease button next).
+              Tip: set Status to “Vacant” if the unit is empty.
             </div>
           </div>
         </div>
